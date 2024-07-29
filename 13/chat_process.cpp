@@ -114,7 +114,7 @@ int run_child(int idx,client_data*users,char*share_mem)
     addfd(child_epollfd,pipefd);
 
     /*子进程需要设置自己的信号处理函数*/
-    addsig(SIGTERM,child_term_handler,true);
+    addsig(SIGTERM,child_term_handler,true);//确保子进程能响应进程退出信号
     while(!stop_child)
     {
         int number=epoll_wait(child_epollfd,events,MAX_EVENT_NUMBER,-1);
@@ -276,29 +276,29 @@ int main(int argc,char*argv[])
                 /*在子进程和主进程间建立管道，以传递必要的数据*/
                 ret=socketpair(PF_UNIX,SOCK_STREAM,0,users[user_count].pipefd);
                 assert(ret!=-1);
-                pid_t pid;
+                pid_t pid=fork();//系统调用被用来创建子进程。fork() 调用后，代码会在父进程和子进程中分别执行。
                 if(pid<0)
                 {
                     close(connfd);
                     continue;
                 }
-                else if(pid==0)//子进程
+                else if(pid==0)//在子进程
                 {
-                    close(connfd);
+                    close(connfd);// 关闭监听描述符，子进程不需要监听
                     close(listenfd);
                     close(users[user_count].pipefd[0]);//数据由子进程流向父进程
                     close(sig_pipefd[0]);
                     close(sig_pipefd[1]);
-                    run_child(user_count,users,share_mem);
-                    munmap((void*)share_mem,USER_LIMIT*BUFFER_SIZE);
+                    run_child(user_count,users,share_mem); 
+                    munmap((void*)share_mem,USER_LIMIT*BUFFER_SIZE);// 清理共享内存映射
                     exit(0);
                 }
-                else
+                else//父进程创建了子进程
                 {
-                    close(connfd);
-                    close(users[user_count].pipefd[1]);
-                    addfd(epollfd,users[user_count].pipefd[0]);
-                    users[user_count].pid=pid;
+                    close(connfd); // 父进程关闭已传递给子进程的连接描述符
+                    close(users[user_count].pipefd[1]);// 关闭管道的写端，数据由子进程流向父进程
+                    addfd(epollfd,users[user_count].pipefd[0]);//子进程
+                    users[user_count].pid=pid; // 记录子进程的PID
                     /*记录新的客户连接在数组users的索引值，建立进程pid和该索引值之间的映射关系*/
                     sub_process[pid]=user_count;
                     user_count++;
@@ -325,11 +325,11 @@ int main(int argc,char*argv[])
                         switch(signals[i])
                         {
                             /*子进程退出，表示由某个客户端关闭了连接*/
-                            case SIGCHLD:
+                            case SIGCHLD://子进程退出
                             {
                                 pid_t pid;
                                 int stat;
-                                while((pid=waitpid(-1,&stat,WNOHANG))>0)
+                                while((pid=waitpid(-1,&stat,WNOHANG))>0)//等待所有子进程结束
                                 {
                                     /*用子进程的pid取得被关闭的客户连接的编号*/
                                     int del_user=sub_process[pid];
@@ -341,7 +341,7 @@ int main(int argc,char*argv[])
                                     /*清除第del_user个客户连接的相关数据*/
                                     epoll_ctl(epollfd,EPOLL_CTL_DEL,users[del_user].pipefd[0],0);
                                     close(users[del_user].pipefd[0]);
-                                    users[del_user]=users[--user_count];
+                                    users[del_user]=users[--user_count];//最后一个不是活跃的连接，为空值
                                     sub_process[users[del_user].pid]=del_user;
 
                                 }
